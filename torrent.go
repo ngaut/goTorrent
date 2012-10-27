@@ -14,7 +14,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"time"
-
+	"strings"
 	"github.com/nictuku/dht"
 	"github.com/nictuku/nettools"
 )
@@ -315,16 +315,41 @@ func connectToPeer(peer string, ch chan net.Conn) {
 	}
 }
 
+func (t *TorrentSession) PeerExist(address string) (exist bool) {
+	index := strings.Index(address, ":")
+	ip := address[:index]
+	_, exist = t.peers[ip]
+	return exist
+}
+
+func (t *TorrentSession) PeerCount() (count int) {
+	return len(t.peers)
+}
+
+func (t *TorrentSession) RemovePeer(address string) {
+	index := strings.Index(address, ":")
+	ip := address[:index]
+	delete(t.peers, ip)
+}
+
 func (t *TorrentSession) AddPeer(conn net.Conn) {
-	peer := conn.RemoteAddr().String()
-	log.Println("Adding peer", peer)
-	if len(t.peers) >= MAX_NUM_PEERS {
-		log.Println("We have enough peers. Rejecting additional peer", peer)
+	address := conn.RemoteAddr().String()
+	log.Println("Adding peer", address)
+	
+	index := strings.Index(address, ":")
+	ip := address[:index]
+
+	if t.PeerExist(address) {
+		return
+	}
+
+	if t.PeerCount() >= MAX_NUM_PEERS {
+		log.Println("We have enough peers. Rejecting additional peer", address)
 		conn.Close()
 		return
 	}
 	ps := NewPeerState(conn)
-	ps.address = peer
+	ps.address = address
 	var header [68]byte
 	copy(header[0:], kBitTorrentHeader[0:])
 	if t.m.Info.Private != 1 && useDHT {
@@ -333,7 +358,7 @@ func (t *TorrentSession) AddPeer(conn net.Conn) {
 	copy(header[28:48], string2Bytes(t.m.InfoHash))
 	copy(header[48:68], string2Bytes(t.si.PeerId))
 
-	t.peers[peer] = ps
+	t.peers[ip] = ps
 	go ps.peerWriter(t.peerMessageChan, header[0:])
 	go ps.peerReader(t.peerMessageChan)
 	//comment by LiuQi
@@ -344,13 +369,14 @@ func (t *TorrentSession) ClosePeer(peer *peerState) {
 	//log.Println("Closing peer", peer.address)
 	_ = t.removeRequests(peer)
 	peer.Close()
-	delete(t.peers, peer.address)
+	t.RemovePeer(peer.address)
 }
-
 
 
 func (t *TorrentSession) DoTorrent() (err error) {
 	t.lastHeartBeat = time.Now()
+
+	choke := true
 
 	log.Println("Fetching torrent.")
 	rechokeChan := time.Tick(1 * time.Second)
@@ -388,7 +414,7 @@ func (t *TorrentSession) DoTorrent() (err error) {
 			for _, peers := range dhtInfoHashPeers {
 				for _, peer := range peers {
 					peer = nettools.BinaryToDottedPort(peer)
-					if _, ok := t.peers[peer]; !ok {
+					if !t.PeerExist(peer) {
 						newPeerCount++
 						go connectToPeer(peer, conChan)
 					}
@@ -405,7 +431,7 @@ func (t *TorrentSession) DoTorrent() (err error) {
 				for i := 0; i < len(peers); i += 6 {
 					peer := nettools.BinaryToDottedPort(peers[i : i+6])
 					//log.Printf("trackerInfoChan %v\n", peer)
-					if _, ok := t.peers[peer]; !ok {
+					if !t.PeerExist(peer) {
 						newPeerCount++
 						go connectToPeer(peer, conChan)
 					}
@@ -450,10 +476,10 @@ func (t *TorrentSession) DoTorrent() (err error) {
 			if t.si.Downloaded > 0 {
 				ratio = float64(t.si.Uploaded) / float64(t.si.Downloaded)
 			}
-			log.Println("Peers:", len(t.peers), "downloaded:", t.si.Downloaded, "uploaded:", t.si.Uploaded, "ratio", ratio)
+			log.Println("Peers:", t.PeerCount(), "downloaded:", t.si.Downloaded, "uploaded:", t.si.Uploaded, "ratio", ratio)
 			log.Println("good, total", t.goodPieces, t.totalPieces)
 			*/
-			if len(t.peers) < TARGET_NUM_PEERS && t.goodPieces < t.totalPieces {
+			if t.PeerCount() < TARGET_NUM_PEERS && t.goodPieces < t.totalPieces {
 				if t.m.Info.Private != 1 && useDHT {
 					go t.dht.PeersRequest(t.m.InfoHash, true)
 				}
@@ -463,6 +489,15 @@ func (t *TorrentSession) DoTorrent() (err error) {
 					}
 				}
 			}
+
+			//simple tick to choke/unchoke all peers
+			//may be random is a better choice
+			//todo: a better policy
+			for _, ps := range t.peers{
+				choke = !choke
+				ps.SetChoke(choke)
+			}
+
 		case _ = <-keepAliveChan:
 			now := time.Now()
 			for _, peer := range t.peers {
@@ -554,6 +589,7 @@ func (t *TorrentSession) RequestBlock2(p *peerState, piece int, endGame bool) (e
 	}
 	return
 }
+
 
 // Request or cancel a block
 func (t *TorrentSession) requestBlockImp(p *peerState, piece int, block int, request bool) {
@@ -765,7 +801,7 @@ func (t *TorrentSession) DoMessage(p *peerState, message []byte) (err error) {
 			}
 
 			n := bytesToUint32(message[1:])
-			
+
 			log.Println("have ", n, "from", p.address)
 			if n < uint32(p.have.n) {
 				p.have.Set(int(n))
@@ -838,6 +874,7 @@ func (t *TorrentSession) DoMessage(p *peerState, message []byte) (err error) {
 				return errors.New("Block length too large.")
 			}
 			globalOffset := int64(index)*t.m.Info.PieceLength + int64(begin)
+			//todo: async write
 			_, err = t.fileStore.WriteAt(message[9:], globalOffset)
 			if err != nil {
 				return err
@@ -890,6 +927,7 @@ func (t *TorrentSession) sendRequest(peer *peerState, index, begin, length uint3
 		buf[0] = 7
 		uint32ToBytes(buf[1:5], index)
 		uint32ToBytes(buf[5:9], begin)
+		//todo: async read
 		_, err = t.fileStore.ReadAt(buf[9:],
 			int64(index)*t.m.Info.PieceLength+int64(begin))
 		if err != nil {
