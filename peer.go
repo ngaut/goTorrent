@@ -6,7 +6,7 @@ import (
 	"time"
 )
 
-const MAX_OUR_REQUESTS = 10
+const MAX_OUR_REQUESTS = 100
 const MAX_PEER_REQUESTS = 10
 const STANDARD_BLOCK_LENGTH = 16 * 1024
 
@@ -30,6 +30,9 @@ type peerState struct {
 	peer_interested bool // peer is interested in this client
 	peer_requests   map[uint64]bool
 	our_requests    map[uint64]time.Time // What we requested, when we requested it
+	upload 			int
+	download		int
+	lastSchedule	time.Time
 }
 
 func queueingWriter(in, out chan []byte) {

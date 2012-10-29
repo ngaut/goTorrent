@@ -17,8 +17,8 @@ func main() {
     if err != nil { 
         log.Fatalln(err) 
     } 
-    //log.SetOutput(io.MultiWriter(logf, os.Stdout)) 
-    log.SetOutput(io.Writer(logf)) 
+    log.SetOutput(io.MultiWriter(logf, os.Stdout)) 
+    //log.SetOutput(io.Writer(logf)) 
 
 
 	args := flag.Args()
