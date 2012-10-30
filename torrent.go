@@ -23,8 +23,8 @@ import (
 const (
 	MAX_NUM_PEERS    = 60
 	TARGET_NUM_PEERS = 15
-	MAX_DOWNLOADING_CONNECTION	= 2
-	MAX_UPLOADING_CONNECTION	= 2
+	MAX_DOWNLOADING_CONNECTION	= 1
+	MAX_UPLOADING_CONNECTION	= 1
 )
 
 // BitTorrent message types. Sources:
@@ -429,8 +429,6 @@ func (t *TorrentSession) AddPeer(conn net.Conn) {
 	t.peers[ip] = ps
 	go ps.peerWriter(t.peerMessageChan, header[0:])
 	go ps.peerReader(t.peerMessageChan)
-	//comment by LiuQi
-	//ps.SetChoke(false) // TODO: better choke policy
 }
 
 func (t *TorrentSession) ClosePeer(peer *peerState) {
@@ -626,11 +624,11 @@ func (t *TorrentSession) DoTorrent() (err error) {
 				}
 			}
 
-			vec := make([]int, len(speedPeers))
-			i := 0
-			for k, _ := range speedPeers{
-				vec[i] = k 
-				i++
+			var vec []int
+			for k, v := range speedPeers{
+				if v.peer_interested {
+					vec = append(vec, k)
+				}
 			}
 			sort.Ints(vec)
 			//reverse
@@ -648,27 +646,27 @@ func (t *TorrentSession) DoTorrent() (err error) {
 				//todo: refactor to function
 				if len(vec) <= n {
 					for i := 0; i < len(vec); i++ {	//unchoke all
-						log.Println("unchoke ", speedPeers[vec[i]].address, "speed", speedPeers[vec[i]].download)
+						log.Println("unchoke ", speedPeers[vec[i]].address, "download", speedPeers[vec[i]].download, "upload", speedPeers[vec[i]].upload)
 						speedPeers[vec[i]].SetChoke(false)
 					}
 				}else{
 					for i := 0; i < n; i++ {
-						log.Println("unchoke ", speedPeers[vec[i]].address, "speed", speedPeers[vec[i]].download)
+						log.Println("unchoke ", speedPeers[vec[i]].address, "download", speedPeers[vec[i]].download, "upload", speedPeers[vec[i]].upload)
 						speedPeers[vec[i]].SetChoke(false)
 					}
 
 					left := vec[n:]
 					//随机unchoke一个连接
-					optimistic := rand.Intn(len(left));
+					opti := rand.Intn(len(left));
 					
-					log.Println("optimistic unchoke ", speedPeers[left[optimistic]].address, "speed", speedPeers[left[optimistic]].download)
-					speedPeers[left[optimistic]].SetChoke(false)
+					log.Println("optimistic unchoke ", speedPeers[left[opti]].address, "download", speedPeers[left[opti]].download, "upload", speedPeers[left[opti]].upload)
+					speedPeers[left[opti]].SetChoke(false)
 
 					//choke others
-					for i := 0; i < len(left); i++ {
-						if i != optimistic {
-							log.Println("choke ", speedPeers[left[i]].address, "speed", speedPeers[left[i]].download)
-							speedPeers[left[i]].SetChoke(true)
+					for _, v := range speedPeers{
+						if !v.am_choking {
+							v.SetChoke(true)
+							log.Println("choke ", v.address, "download", v.download, "upload", v.upload)
 						}
 					}
 				}
@@ -677,27 +675,27 @@ func (t *TorrentSession) DoTorrent() (err error) {
 				//todo: refactor to function
 				if len(vec) <= n {
 					for i := 0; i < len(vec); i++ {	//unchoke all
-						log.Println("unchoke ", speedPeers[vec[i]].address, "speed", speedPeers[vec[i]].upload)
+						log.Println("unchoke ", speedPeers[vec[i]].address, "download", speedPeers[vec[i]].download, "upload", speedPeers[vec[i]].upload)
 						speedPeers[vec[i]].SetChoke(false)
 					}
 				}else{
 					for i := 0; i < n; i++ {
-						log.Println("unchoke ", speedPeers[vec[i]].address, "speed", speedPeers[vec[i]].upload)
+						log.Println("unchoke ", speedPeers[vec[i]].address, "download", speedPeers[vec[i]].download, "upload", speedPeers[vec[i]].upload)
 						speedPeers[vec[i]].SetChoke(false)
 					}
 
 					left := vec[n:]
 					//随机unchoke一个连接
-					optimistic := rand.Intn(len(left));
+					opti := rand.Intn(len(left));
 					
-					log.Println("optimistic unchoke ", speedPeers[left[optimistic]].address, "speed", speedPeers[left[optimistic]].upload)
-					speedPeers[left[optimistic]].SetChoke(false)
+					log.Println("optimistic unchoke ", speedPeers[left[opti]].address, "download", speedPeers[left[opti]].download, "upload", speedPeers[left[opti]].upload)
+					speedPeers[left[opti]].SetChoke(false)
 
 					//choke others
-					for i := 0; i < len(left); i++ {
-						if i != optimistic {
-							log.Println("choke ", speedPeers[left[i]].address, "speed", speedPeers[left[i]].upload)
-							speedPeers[left[i]].SetChoke(true)
+					for _, v := range speedPeers{
+						if !v.am_choking {
+							v.SetChoke(true)
+							log.Println("choke ", v.address, "download", v.download, "upload", v.upload)
 						}
 					}
 				}
@@ -1060,7 +1058,7 @@ func (t *TorrentSession) DoMessage(p *peerState, message []byte) (err error) {
 			}
 			// TODO: Asynchronous
 			// p.AddRequest(index, begin, length)
-			p.upload += int(length)
+			p.upload += int(length) / 1024	//k
 			if _, ok := t.history[p.address]; !ok {
 				t.history[p.address] = &DownloadUpload{0, 0}
 			}
@@ -1093,7 +1091,7 @@ func (t *TorrentSession) DoMessage(p *peerState, message []byte) (err error) {
 			}
 			globalOffset := int64(index)*t.m.Info.PieceLength + int64(begin)
 			//todo: async write
-			p.download += int(length)
+			p.download += int(length) / 1024	// k
 			if _, ok := t.history[p.address]; !ok {
 				t.history[p.address] = &DownloadUpload{0, 0}
 			}

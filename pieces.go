@@ -96,6 +96,8 @@ func hashPiece(h chan chunk, result chan chunk) {
 }
 
 func checkPiece(fs FileStore, totalLength int64, m *MetaInfo, pieceIndex int) (good bool, err error) {
+	//不检查单个piece校验和
+	/*
 	ref := m.Info.Pieces
 	currentSum, err := computePieceSum(fs, totalLength, m.Info.PieceLength, pieceIndex)
 	if err != nil {
@@ -105,6 +107,8 @@ func checkPiece(fs FileStore, totalLength int64, m *MetaInfo, pieceIndex int) (g
 	end := base + sha1.Size
 	good = checkEqual(ref[base:end], currentSum)
 	return
+	*/
+	return true, nil
 }
 
 func computePieceSum(fs FileStore, totalLength int64, pieceLength int64, pieceIndex int) (sum []byte, err error) {
