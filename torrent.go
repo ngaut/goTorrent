@@ -14,7 +14,6 @@ import (
 	"path/filepath"
 	"strconv"
 	"time"
-	"sort"
 	"strings"
 	"github.com/nictuku/dht"
 	"github.com/nictuku/nettools"
@@ -23,8 +22,8 @@ import (
 const (
 	MAX_NUM_PEERS    = 60
 	TARGET_NUM_PEERS = 15
-	MAX_DOWNLOADING_CONNECTION	= 1
-	MAX_UPLOADING_CONNECTION	= 1
+	MAX_DOWNLOADING_CONNECTION	= 2
+	MAX_UPLOADING_CONNECTION	= 2
 )
 
 // BitTorrent message types. Sources:
@@ -270,8 +269,8 @@ func NewTorrentSession(torrent string) (ts *TorrentSession, err error) {
 		peerMessageChan: make(chan peerMessage),
 		activePieces:    make(map[int]*ActivePiece),
 		history:		make(map[string]*DownloadUpload),
-		ioRequestChan:	make(chan *IoArgs, 10),
-		ioResponceChan: make(chan interface{}, 10),
+		ioRequestChan:	make(chan *IoArgs, 100),
+		ioResponceChan: make(chan interface{}, 100),
 		}
 
 	t.m, err = getMetaInfo(torrent)
@@ -470,6 +469,7 @@ func GetLocalIP() (string, error) {
     return "", errors.New("cannot find local IP address") 
 } 
 
+
 func (t *TorrentSession) DoTorrent() (err error) {
 	t.lastHeartBeat = time.Now()
 
@@ -611,91 +611,118 @@ func (t *TorrentSession) DoTorrent() (err error) {
 			//(2). when seeding
 			// Unchoke the top 'MaxUploads' downloaders (peers that we are
     		// uploading to) and choke all others.
-			speedPeers := make(map[int]*peerState)
+
+    		vec := make([]*peerState, 0)
+
 			if t.goodPieces < t.totalPieces {
-				for _, ps := range t.peers{
-					speedPeers[ps.download] = ps 
-					log.Println(ps.address, "download ", ps.download, "upload", ps.upload)
+				for _, v := range t.peers{
+					//insertion sort
+					if !v.peer_interested {
+						continue
+					}
+
+					log.Println("schduler interested", v.address)
+
+					i := 0
+					for ; i < len(vec); i++ {
+						 if v.download >= vec[i].download {	//find position
+							break
+						}
+					}
+
+					vec = append(vec[:i], append([]*peerState{v}, vec[i:]...)...)
+					log.Println(v.address, "download ", v.download, "upload", v.upload)
 				}
 			}else{
-				for _, ps := range t.peers{
-					speedPeers[ps.upload] = ps
-					log.Println(ps.address, "download ", ps.download, "upload", ps.upload)
+				for _, v := range t.peers{
+					//insertion sort
+					if !v.peer_interested {
+						continue
+					}
+
+					
+					i := 0
+					for ; i < len(vec); i++ {
+						 if v.upload >= vec[i].upload {	//find position
+							break
+						}
+					}
+
+					vec = append(vec[:i], append([]*peerState{v}, vec[i:]...)...)
+					log.Println(v.address, "download ", v.download, "upload", v.upload)
 				}
 			}
 
-			var vec []int
-			for k, v := range speedPeers{
-				if v.peer_interested {
-					vec = append(vec, k)
+			interestedCount := len(vec)
+			log.Println("interestedCount", interestedCount)
+
+			for _, v := range t.peers{
+				if !v.peer_interested {
+					vec = append(vec, v)
 				}
 			}
-			sort.Ints(vec)
-			//reverse
-			for i := 0; i < len(vec) / 2; i++ {
-				vec[i], vec[len(vec) - 1 - i] = vec[len(vec) - 1 - i], vec[i]
-			}
 
+			/*
 			for k, v := range t.history {
 				log.Println("from", k, "total download", v.Downloaded, "total upload", v.Uploaded)
 			}
-
+			*/
 
 			if t.goodPieces < t.totalPieces {
 				n := MAX_DOWNLOADING_CONNECTION
 				//todo: refactor to function
-				if len(vec) <= n {
-					for i := 0; i < len(vec); i++ {	//unchoke all
-						log.Println("unchoke ", speedPeers[vec[i]].address, "download", speedPeers[vec[i]].download, "upload", speedPeers[vec[i]].upload)
-						speedPeers[vec[i]].SetChoke(false)
+				if interestedCount <= n {
+					for i := 0; i < interestedCount; i++ {	//unchoke all
+						log.Println("unchoke ", vec[i].address, "download", vec[i].download, "upload", vec[i].upload)
+						vec[i].SetChoke(false)
 					}
 				}else{
 					for i := 0; i < n; i++ {
-						log.Println("unchoke ", speedPeers[vec[i]].address, "download", speedPeers[vec[i]].download, "upload", speedPeers[vec[i]].upload)
-						speedPeers[vec[i]].SetChoke(false)
+						log.Println("unchoke ", vec[i].address, "download", vec[i].download, "upload", vec[i].upload)
+						vec[i].SetChoke(false)
 					}
 
-					left := vec[n:]
+					left := vec[n : interestedCount]
 					//随机unchoke一个连接
 					opti := rand.Intn(len(left));
 					
-					log.Println("optimistic unchoke ", speedPeers[left[opti]].address, "download", speedPeers[left[opti]].download, "upload", speedPeers[left[opti]].upload)
-					speedPeers[left[opti]].SetChoke(false)
+					log.Println("optimistic unchoke ", left[opti].address, "download", left[opti].download, "upload", left[opti].upload)
+					left[opti].SetChoke(false)
 
-					//choke others
-					for _, v := range speedPeers{
-						if !v.am_choking {
-							v.SetChoke(true)
-							log.Println("choke ", v.address, "download", v.download, "upload", v.upload)
+					//choke all others
+					for i := n; i < len(vec); i++ {	
+						if i != n + opti {
+							log.Println("choke ", vec[i].address, "download", vec[i].download, "upload", vec[i].upload)
+							vec[i].SetChoke(true)
 						}
 					}
 				}
 			}else{
 				n := MAX_UPLOADING_CONNECTION
 				//todo: refactor to function
-				if len(vec) <= n {
-					for i := 0; i < len(vec); i++ {	//unchoke all
-						log.Println("unchoke ", speedPeers[vec[i]].address, "download", speedPeers[vec[i]].download, "upload", speedPeers[vec[i]].upload)
-						speedPeers[vec[i]].SetChoke(false)
+				if interestedCount <= n {
+					for i := 0; i < interestedCount; i++ {	//unchoke all
+						log.Println("unchoke ", vec[i].address, "download", vec[i].download, "upload", vec[i].upload)
+						vec[i].SetChoke(false)
 					}
 				}else{
 					for i := 0; i < n; i++ {
-						log.Println("unchoke ", speedPeers[vec[i]].address, "download", speedPeers[vec[i]].download, "upload", speedPeers[vec[i]].upload)
-						speedPeers[vec[i]].SetChoke(false)
+						log.Println("unchoke ", vec[i].address, "download", vec[i].download, "upload", vec[i].upload)
+						vec[i].SetChoke(false)
 					}
 
-					left := vec[n:]
+					left := vec[n : interestedCount]
 					//随机unchoke一个连接
 					opti := rand.Intn(len(left));
 					
-					log.Println("optimistic unchoke ", speedPeers[left[opti]].address, "download", speedPeers[left[opti]].download, "upload", speedPeers[left[opti]].upload)
-					speedPeers[left[opti]].SetChoke(false)
+					log.Println("optimistic unchoke ", left[opti].address, "download", left[opti].download, "upload", left[opti].upload)
+					left[opti].SetChoke(false)
 
-					//choke others
-					for _, v := range speedPeers{
-						if !v.am_choking {
-							v.SetChoke(true)
-							log.Println("choke ", v.address, "download", v.download, "upload", v.upload)
+					//choke all others
+					for i := n; i < len(vec); i++ {	
+						if i != n + opti {
+							log.Println("choke ", vec[i].address, "download", vec[i].download, "upload", vec[i].upload)
+							vec[i].SetChoke(true)
 						}
 					}
 				}
@@ -864,9 +891,14 @@ func (t *TorrentSession) RecordBlock(p *peerState, piece, begin, length uint32) 
 			t.goodPieces++
 			//log.Println("Have", t.goodPieces, "of", t.totalPieces, "pieces.")
 			if t.goodPieces == t.totalPieces {
+				log.Printf("\n\n\ndownload finish\n\n\n")
 				t.fetchTrackerInfo("completed")
 				// TODO: Drop connections to all seeders.
+				for _, p := range t.peers {
+					p.SetInterested(false)
+				}
 			}
+
 			for _, p := range t.peers {
 				if p.have != nil {
 					if p.have.IsSet(int(piece)) {
@@ -998,9 +1030,8 @@ func (t *TorrentSession) DoMessage(p *peerState, message []byte) (err error) {
 			}
 			p.peer_interested = true
 			p.SetChoke(true) // TODO: better choke policy
-			// TODO: Consider unchoking
 		case NOT_INTERESTED:
-			// log.Println("not interested", p)
+			log.Println("not interested from", p.address)
 			if len(message) != 1 {
 				return errors.New("Unexpected length")
 			}
@@ -1022,7 +1053,7 @@ func (t *TorrentSession) DoMessage(p *peerState, message []byte) (err error) {
 				return errors.New("have index is out of range.")
 			}
 		case BITFIELD:
-			// log.Println("bitfield", p.address)
+			log.Println("bitfield from", p.address)
 			if p.have != nil {
 				return errors.New("Late bitfield operation")
 			}
@@ -1031,8 +1062,6 @@ func (t *TorrentSession) DoMessage(p *peerState, message []byte) (err error) {
 				return errors.New("Invalid bitfield data.")
 			}
 			t.checkInteresting(p)
-			//add by LiuQi 
-			p.SetChoke(true) // TODO: better choke policy
 		case REQUEST:
 			// log.Println("request", p.address)
 			if len(message) != 13 {

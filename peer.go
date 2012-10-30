@@ -6,7 +6,7 @@ import (
 	"time"
 )
 
-const MAX_OUR_REQUESTS = 100
+const MAX_OUR_REQUESTS = 10
 const MAX_PEER_REQUESTS = 10
 const STANDARD_BLOCK_LENGTH = 16 * 1024
 
