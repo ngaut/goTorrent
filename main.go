@@ -5,6 +5,7 @@ import (
 	"log"
 	"os"
 	"io"
+	"runtime"
 )
 
 var torrent string
@@ -19,6 +20,8 @@ func main() {
     } 
     log.SetOutput(io.MultiWriter(logf, os.Stdout)) 
     //log.SetOutput(io.Writer(logf)) 
+
+    runtime.GOMAXPROCS(2) 
 
 
 	args := flag.Args()

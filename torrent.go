@@ -19,12 +19,15 @@ import (
 	"github.com/nictuku/nettools"
 )
 
-const (
-	MAX_NUM_PEERS    = 60
-	TARGET_NUM_PEERS = 15
-	MAX_DOWNLOADING_CONNECTION	= 2
-	MAX_UPLOADING_CONNECTION	= 2
-)
+
+type Config struct{
+	MAX_NUM_PEERS 				int //  = 60
+	TARGET_NUM_PEERS 			int //	= 15
+	MAX_DOWNLOADING_CONNECTION  int	//	= 2
+	MAX_UPLOADING_CONNECTION	int	//	= 2
+	MAX_OUR_REQUESTS 			int //= 10
+	MAX_PEER_REQUESTS 			int //= 10
+}
 
 // BitTorrent message types. Sources:
 // http://bittorrent.org/beps/bep_0003.html
@@ -51,6 +54,8 @@ var fileDir string
 var useDHT bool
 var trackerLessMode bool
 
+var cfg Config
+
 func init() {
 	flag.StringVar(&fileDir, "fileDir", ".", "path to directory where files are stored")
 	// If the port is 0, picks up a random port - but the DHT will keep
@@ -62,6 +67,9 @@ func init() {
 	flag.BoolVar(&trackerLessMode, "trackerLessMode", false, "Do not get peers from the tracker. Good for "+
 		"testing the DHT mode.")
 	rand.Seed(int64(time.Now().Nanosecond()))
+
+	cfg = Config{MAX_NUM_PEERS : 60, TARGET_NUM_PEERS : 15, MAX_DOWNLOADING_CONNECTION : 1,
+		MAX_UPLOADING_CONNECTION : 1, MAX_OUR_REQUESTS : 10, MAX_PEER_REQUESTS : 10}
 }
 
 func peerId() string {
@@ -266,7 +274,7 @@ func NewTorrentSession(torrent string) (ts *TorrentSession, err error) {
 	}
 
 	t := &TorrentSession{peers: make(map[string]*peerState),
-		peerMessageChan: make(chan peerMessage),
+		peerMessageChan: make(chan peerMessage, 100),
 		activePieces:    make(map[int]*ActivePiece),
 		history:		make(map[string]*DownloadUpload),
 		ioRequestChan:	make(chan *IoArgs, 100),
@@ -316,7 +324,7 @@ func NewTorrentSession(torrent string) (ts *TorrentSession, err error) {
 	t.si = &SessionInfo{PeerId: peerId(), Port: listenPort, Left: left}
 	if useDHT {
 		// TODO: UPnP UDP port mapping.
-		if t.dht, err = dht.NewDHTNode(listenPort, TARGET_NUM_PEERS, true); err != nil {
+		if t.dht, err = dht.NewDHTNode(listenPort, cfg.TARGET_NUM_PEERS, true); err != nil {
 			log.Println("DHT node creation error", err)
 			return
 		}
@@ -407,7 +415,7 @@ func (t *TorrentSession) AddPeer(conn net.Conn) {
 		return
 	}
 
-	if t.PeerCount() >= MAX_NUM_PEERS {
+	if t.PeerCount() >= cfg.MAX_NUM_PEERS {
 		log.Println("We have enough peers. Rejecting additional peer", address)
 		conn.Close()
 		return
@@ -582,7 +590,6 @@ func (t *TorrentSession) DoTorrent() (err error) {
 				panic("Unknown message")
 			}	
 		case _ = <-rechokeChan:
-			// TODO: recalculate who to choke / unchoke
 			/*
 			t.lastHeartBeat = time.Now()
 			ratio := float64(0.0)
@@ -592,7 +599,7 @@ func (t *TorrentSession) DoTorrent() (err error) {
 			log.Println("Peers:", t.PeerCount(), "downloaded:", t.si.Downloaded, "uploaded:", t.si.Uploaded, "ratio", ratio)
 			log.Println("good, total", t.goodPieces, t.totalPieces)
 			*/
-			if t.PeerCount() < TARGET_NUM_PEERS && t.goodPieces < t.totalPieces {
+			if t.PeerCount() < cfg.TARGET_NUM_PEERS && t.goodPieces < t.totalPieces {
 				if t.m.Info.Private != 1 && useDHT {
 					go t.dht.PeersRequest(t.m.InfoHash, true)
 				}
@@ -621,7 +628,7 @@ func (t *TorrentSession) DoTorrent() (err error) {
 						continue
 					}
 
-					log.Println("schduler interested", v.address)
+					//log.Println("schduler interested", v.address)
 
 					i := 0
 					for ; i < len(vec); i++ {
@@ -631,7 +638,7 @@ func (t *TorrentSession) DoTorrent() (err error) {
 					}
 
 					vec = append(vec[:i], append([]*peerState{v}, vec[i:]...)...)
-					log.Println(v.address, "download ", v.download, "upload", v.upload)
+					//log.Println(v.address, "download ", v.download, "upload", v.upload)
 				}
 			}else{
 				for _, v := range t.peers{
@@ -649,12 +656,12 @@ func (t *TorrentSession) DoTorrent() (err error) {
 					}
 
 					vec = append(vec[:i], append([]*peerState{v}, vec[i:]...)...)
-					log.Println(v.address, "download ", v.download, "upload", v.upload)
+					//log.Println(v.address, "download ", v.download, "upload", v.upload)
 				}
 			}
 
 			interestedCount := len(vec)
-			log.Println("interestedCount", interestedCount)
+			log.Println("interestedCount", interestedCount, "peer count", len(t.peers))
 
 			for _, v := range t.peers{
 				if !v.peer_interested {
@@ -669,12 +676,18 @@ func (t *TorrentSession) DoTorrent() (err error) {
 			*/
 
 			if t.goodPieces < t.totalPieces {
-				n := MAX_DOWNLOADING_CONNECTION
+				n := cfg.MAX_DOWNLOADING_CONNECTION
 				//todo: refactor to function
 				if interestedCount <= n {
 					for i := 0; i < interestedCount; i++ {	//unchoke all
 						log.Println("unchoke ", vec[i].address, "download", vec[i].download, "upload", vec[i].upload)
 						vec[i].SetChoke(false)
+					}
+
+					//choke all others
+					for i := interestedCount; i < len(vec); i++ {	
+						log.Println("choke ", vec[i].address, "download", vec[i].download, "upload", vec[i].upload)
+						vec[i].SetChoke(true)
 					}
 				}else{
 					for i := 0; i < n; i++ {
@@ -698,12 +711,18 @@ func (t *TorrentSession) DoTorrent() (err error) {
 					}
 				}
 			}else{
-				n := MAX_UPLOADING_CONNECTION
+				n := cfg.MAX_UPLOADING_CONNECTION
 				//todo: refactor to function
 				if interestedCount <= n {
 					for i := 0; i < interestedCount; i++ {	//unchoke all
 						log.Println("unchoke ", vec[i].address, "download", vec[i].download, "upload", vec[i].upload)
 						vec[i].SetChoke(false)
+					}
+
+					//choke all others
+					for i := interestedCount; i < len(vec); i++ {	
+						log.Println("choke ", vec[i].address, "download", vec[i].download, "upload", vec[i].upload)
+						vec[i].SetChoke(true)
 					}
 				}else{
 					for i := 0; i < n; i++ {
@@ -802,6 +821,7 @@ func (t *TorrentSession) ChoosePiece(p *peerState) (piece int) {
 	if piece == -1 {
 		piece = t.checkRange(p, 0, start)
 	}
+	
 	return
 }
 
@@ -934,7 +954,7 @@ func (t *TorrentSession) removeRequests(p *peerState) (err error) {
 		// log.Println("Forgetting we requested block ", piece, ".", block)
 		t.removeRequest(piece, block)
 	}
-	p.our_requests = make(map[uint64]time.Time, MAX_OUR_REQUESTS)
+	p.our_requests = make(map[uint64]time.Time, cfg.MAX_OUR_REQUESTS)
 	return
 }
 
@@ -1017,7 +1037,7 @@ func (t *TorrentSession) DoMessage(p *peerState, message []byte) (err error) {
 				return errors.New("Unexpected length")
 			}
 			p.peer_choking = false
-			for i := 0; i < MAX_OUR_REQUESTS; i++ {
+			for i := 0; i < cfg.MAX_OUR_REQUESTS; i++ {
 				err = t.RequestBlock(p)
 				if err != nil {
 					return
@@ -1043,11 +1063,16 @@ func (t *TorrentSession) DoMessage(p *peerState, message []byte) (err error) {
 
 			n := bytesToUint32(message[1:])
 
-			//log.Println("have ", n, "from", p.address)
+//			log.Println("have", n, "from", p.address)
 			if n < uint32(p.have.n) {
 				p.have.Set(int(n))
 				if !p.am_interested && !t.pieceSet.IsSet(int(n)) {
 					p.SetInterested(true)
+				}
+
+				if !p.peer_choking && len(p.our_requests) < cfg.MAX_OUR_REQUESTS{
+					//log.Print(".")
+					//t.RequestBlock(p)
 				}
 			} else {
 				return errors.New("have index is out of range.")
@@ -1085,8 +1110,6 @@ func (t *TorrentSession) DoMessage(p *peerState, message []byte) (err error) {
 			if length != STANDARD_BLOCK_LENGTH {
 				return errors.New("Unexpected block length.")
 			}
-			// TODO: Asynchronous
-			// p.AddRequest(index, begin, length)
 			p.upload += int(length) / 1024	//k
 			if _, ok := t.history[p.address]; !ok {
 				t.history[p.address] = &DownloadUpload{0, 0}
@@ -1119,18 +1142,19 @@ func (t *TorrentSession) DoMessage(p *peerState, message []byte) (err error) {
 				return errors.New("Block length too large.")
 			}
 			globalOffset := int64(index)*t.m.Info.PieceLength + int64(begin)
-			//todo: async write
+
 			p.download += int(length) / 1024	// k
 			if _, ok := t.history[p.address]; !ok {
 				t.history[p.address] = &DownloadUpload{0, 0}
 			}
 			t.history[p.address].Downloaded += int64(length)
 
-
 			context := &WriteContext{peer:p, whichPiece:index, begin:begin, length:uint32(length)}
 			args := &IoArgs{ f : t.fileStore, ioMode:MODE_WRITE, buf: message[9:], offset:globalOffset, context:context}  
+			//asyn write
 			t.ioRequestChan<-args
-			
+
+			//todo: check if we still interested in other peers
 		case CANCEL:
 			// log.Println("cancel")
 			if len(message) != 13 {
@@ -1154,7 +1178,8 @@ func (t *TorrentSession) DoMessage(p *peerState, message []byte) (err error) {
 			if length != STANDARD_BLOCK_LENGTH {
 				return errors.New("Unexpected block length.")
 			}
-			p.CancelRequest(index, begin, length)
+			//just ignore it
+
 		case PORT:
 			// TODO: Implement this message.
 			// We see peers sending us 16K byte messages here, so
@@ -1181,6 +1206,7 @@ func (t *TorrentSession) sendRequest(peer *peerState, index, begin, length uint3
 
 		rc := &ReadContext{peer:peer, msgBuf:buf, length:length}
 		args := &IoArgs{ f : t.fileStore, ioMode:MODE_READ, buf: buf[9:], offset:int64(index)*t.m.Info.PieceLength+int64(begin), context:rc}  
+		//asyn read
 		t.ioRequestChan<-args
 	}
 	return

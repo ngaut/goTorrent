@@ -6,8 +6,7 @@ import (
 	"time"
 )
 
-const MAX_OUR_REQUESTS = 10
-const MAX_PEER_REQUESTS = 10
+
 const STANDARD_BLOCK_LENGTH = 16 * 1024
 
 type peerMessage struct {
@@ -69,13 +68,13 @@ L:
 }
 
 func NewPeerState(conn net.Conn) *peerState {
-	writeChan := make(chan []byte)
-	writeChan2 := make(chan []byte)
+	writeChan := make(chan []byte, 50)
+	writeChan2 := make(chan []byte, 50)
 	go queueingWriter(writeChan, writeChan2)
 	return &peerState{writeChan: writeChan, writeChan2: writeChan2, conn: conn,
 		am_choking: true, peer_choking: true,
-		peer_requests: make(map[uint64]bool, MAX_PEER_REQUESTS),
-		our_requests:  make(map[uint64]time.Time, MAX_OUR_REQUESTS)}
+		peer_requests: make(map[uint64]bool, cfg.MAX_PEER_REQUESTS),
+		our_requests:  make(map[uint64]time.Time, cfg.MAX_OUR_REQUESTS)}
 }
 
 func (p *peerState) Close() {
@@ -84,16 +83,9 @@ func (p *peerState) Close() {
 }
 
 func (p *peerState) AddRequest(index, begin, length uint32) {
-	if !p.am_choking && len(p.peer_requests) < MAX_PEER_REQUESTS {
+	if !p.am_choking && len(p.peer_requests) < cfg.MAX_PEER_REQUESTS {
 		offset := (uint64(index) << 32) | uint64(begin)
 		p.peer_requests[offset] = true
-	}
-}
-
-func (p *peerState) CancelRequest(index, begin, length uint32) {
-	offset := (uint64(index) << 32) | uint64(begin)
-	if _, ok := p.peer_requests[offset]; ok {
-		delete(p.peer_requests, offset)
 	}
 }
 
@@ -113,7 +105,7 @@ func (p *peerState) SetChoke(choke bool) {
 		b := byte(1)
 		if choke {
 			b = 0
-			p.peer_requests = make(map[uint64]bool, MAX_PEER_REQUESTS)
+			p.peer_requests = make(map[uint64]bool, cfg.MAX_PEER_REQUESTS)
 		}
 		p.sendOneCharMessage(b)
 	}
