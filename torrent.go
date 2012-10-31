@@ -17,6 +17,7 @@ import (
 	"strings"
 	"github.com/nictuku/dht"
 	"github.com/nictuku/nettools"
+	"github.com/ghais/gocache"
 )
 
 
@@ -68,8 +69,8 @@ func init() {
 		"testing the DHT mode.")
 	rand.Seed(int64(time.Now().Nanosecond()))
 
-	cfg = Config{MAX_NUM_PEERS : 60, TARGET_NUM_PEERS : 15, MAX_DOWNLOADING_CONNECTION : 1,
-		MAX_UPLOADING_CONNECTION : 1, MAX_OUR_REQUESTS : 10, MAX_PEER_REQUESTS : 10}
+	cfg = Config{MAX_NUM_PEERS : 60, TARGET_NUM_PEERS : 5, MAX_DOWNLOADING_CONNECTION : 2,
+		MAX_UPLOADING_CONNECTION : 2, MAX_OUR_REQUESTS : 10, MAX_PEER_REQUESTS : 10}
 }
 
 func peerId() string {
@@ -221,6 +222,7 @@ type TorrentSession struct {
 	history			map[string]*DownloadUpload
 	ioRequestChan 	chan *IoArgs
 	ioResponceChan 	chan interface{}
+	cache			*cache.LRUCache
 }
 
 type IoArgs struct{
@@ -239,9 +241,10 @@ type WriteContext struct{
 }
 
 type ReadContext struct{
-	peer 		*peerState
-	msgBuf		[]byte
-	length 		uint32
+	peer 			*peerState
+	msgBuf			[]byte
+	globalOffset 	int64
+	length 			uint32
 }
 
 
@@ -280,6 +283,8 @@ func NewTorrentSession(torrent string) (ts *TorrentSession, err error) {
 		ioRequestChan:	make(chan *IoArgs, 100),
 		ioResponceChan: make(chan interface{}, 100),
 		}
+
+	t.cache = cache.NewLRUCache(10 * 1024 *1024)	
 
 	t.m, err = getMetaInfo(torrent)
 	if err != nil {
@@ -580,12 +585,20 @@ func (t *TorrentSession) DoTorrent() (err error) {
 		case conn := <-conChan:
 			t.AddPeer(conn)
 		case ioResult = <-t.ioResponceChan:
-			if context, ok := ioResult.(*WriteContext); ok {
-				t.RecordBlock(context.peer, context.whichPiece, context.begin, context.length)
-				err = t.RequestBlock(context.peer)
+			if _, ok := ioResult.(*WriteContext); ok {
+				
 			}else if context, ok := ioResult.(*ReadContext); ok {
-				context.peer.sendMessage(context.msgBuf)
-				t.si.Uploaded += int64(context.length)
+				value := &CacheValue{}
+				value.buf = append(value.buf, context.msgBuf[9:]...)
+
+				t.cache.Set(context.globalOffset, value)
+				//make sure the peer is still alive
+				for _, v := range t.peers{
+					if v == context.peer{
+						context.peer.sendMessage(context.msgBuf)
+						t.si.Uploaded += int64(context.length)
+					}
+				}
 			}else{
 				panic("Unknown message")
 			}	
@@ -978,6 +991,14 @@ func (t *TorrentSession) doCheckRequests(p *peerState) (err error) {
 	return
 }
 
+type CacheValue struct{
+	buf []byte
+}
+
+func (self *CacheValue) Size() int{
+	return len(self.buf) 
+}
+
 func (t *TorrentSession) DoMessage(p *peerState, message []byte) (err error) {
 	if message == nil {
 		return io.EOF // The reader or writer goroutine has exited
@@ -1151,10 +1172,21 @@ func (t *TorrentSession) DoMessage(p *peerState, message []byte) (err error) {
 
 			context := &WriteContext{peer:p, whichPiece:index, begin:begin, length:uint32(length)}
 			args := &IoArgs{ f : t.fileStore, ioMode:MODE_WRITE, buf: message[9:], offset:globalOffset, context:context}  
+			//todo: check if we still interested in other peers
+
+			value := &CacheValue{}
+			value.buf = append(value.buf, message[9:]...)
+			
+			t.cache.Set(globalOffset, value)
+
+
 			//asyn write
 			t.ioRequestChan<-args
 
-			//todo: check if we still interested in other peers
+			t.RecordBlock(p, index, begin, uint32(length))
+			err = t.RequestBlock(p)
+
+			
 		case CANCEL:
 			// log.Println("cancel")
 			if len(message) != 13 {
@@ -1203,11 +1235,24 @@ func (t *TorrentSession) sendRequest(peer *peerState, index, begin, length uint3
 		buf[0] = 7
 		uint32ToBytes(buf[1:5], index)
 		uint32ToBytes(buf[5:9], begin)
-
-		rc := &ReadContext{peer:peer, msgBuf:buf, length:length}
-		args := &IoArgs{ f : t.fileStore, ioMode:MODE_READ, buf: buf[9:], offset:int64(index)*t.m.Info.PieceLength+int64(begin), context:rc}  
-		//asyn read
-		t.ioRequestChan<-args
+		
+		globalOffset := int64(index)*t.m.Info.PieceLength+int64(begin)
+		if block, ok := t.cache.Get(globalOffset); ok{
+			//log.Println("cache hint")
+			if k, ok := block.(*CacheValue); ok {
+				copy(buf[9:], k.buf)
+				peer.sendMessage(buf)
+				t.si.Uploaded += int64(length)
+			}else{
+				panic("invalid cache")
+			}
+		}else{
+			//log.Println("cache miss ", globalOffset)
+			//asyn read
+			rc := &ReadContext{peer:peer, msgBuf:buf, globalOffset:globalOffset, length:length}
+			args := &IoArgs{ f : t.fileStore, ioMode:MODE_READ, buf: buf[9:], offset:globalOffset, context:rc}  
+			t.ioRequestChan<-args
+		}
 	}
 	return
 }
