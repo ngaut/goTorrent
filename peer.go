@@ -32,6 +32,7 @@ type peerState struct {
 	upload 			int
 	download		int
 	lastSchedule	time.Time
+	isSeed			bool
 }
 
 func queueingWriter(in, out chan []byte) {
@@ -74,7 +75,8 @@ func NewPeerState(conn net.Conn) *peerState {
 	return &peerState{writeChan: writeChan, writeChan2: writeChan2, conn: conn,
 		am_choking: true, peer_choking: true,
 		peer_requests: make(map[uint64]bool, cfg.MAX_PEER_REQUESTS),
-		our_requests:  make(map[uint64]time.Time, cfg.MAX_OUR_REQUESTS)}
+		our_requests:  make(map[uint64]time.Time, cfg.MAX_OUR_REQUESTS),
+		isSeed:false}
 }
 
 func (p *peerState) Close() {
