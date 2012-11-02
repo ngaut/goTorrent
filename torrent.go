@@ -1,7 +1,6 @@
 package main
 
 import (
-	"bytes"
 	"errors"
 	"flag"
 	"fmt"
@@ -10,7 +9,6 @@ import (
 	"math/rand"
 	"net"
 	"net/url"
-	"os"
 	"path/filepath"
 	"strconv"
 	"time"
@@ -22,12 +20,12 @@ import (
 
 
 type Config struct{
-	MAX_NUM_PEERS 				int //  = 60
-	TARGET_NUM_PEERS 			int //	= 15
-	MAX_DOWNLOADING_CONNECTION  int	//	= 2
-	MAX_UPLOADING_CONNECTION	int	//	= 2
-	MAX_OUR_REQUESTS 			int //= 10
-	MAX_PEER_REQUESTS 			int //= 10
+	MAX_NUM_PEERS 				int 
+	TARGET_NUM_PEERS 			int 
+	MAX_DOWNLOADING_CONNECTION  int	
+	MAX_UPLOADING_CONNECTION	int	
+	MAX_OUR_REQUESTS 			int
+	MAX_PEER_REQUESTS 			int 
 }
 
 // BitTorrent message types. Sources:
@@ -73,11 +71,7 @@ func init() {
 		MAX_UPLOADING_CONNECTION : 1, MAX_OUR_REQUESTS : 10, MAX_PEER_REQUESTS : 10}
 }
 
-func peerId() string {
-	sid := "-tt" + strconv.Itoa(os.Getpid()) + "_" + strconv.FormatInt(rand.Int63(), 10)
-	log.Println("peerId() ", sid[0:20])
-	return sid[0:20]
-}
+
 
 func chooseListenPort() (listenPort int, err error) {
 	listenPort = port
@@ -143,65 +137,6 @@ func (t *TorrentSession) listenForPeerConnections(conChan chan net.Conn) {
 	}()
 }
 
-var kBitTorrentHeader = []byte{'\x13', 'B', 'i', 't', 'T', 'o', 'r',
-	'r', 'e', 'n', 't', ' ', 'p', 'r', 'o', 't', 'o', 'c', 'o', 'l'}
-
-func string2Bytes(s string) []byte { return bytes.NewBufferString(s).Bytes() }
-
-type ActivePiece struct {
-	downloaderCount []int // -1 means piece is already downloaded
-	pieceLength     int
-}
-
-func (a *ActivePiece) chooseBlockToDownload(endgame bool) (index int) {
-	if endgame {
-		return a.chooseBlockToDownloadEndgame()
-	}
-	return a.chooseBlockToDownloadNormal()
-}
-
-func (a *ActivePiece) chooseBlockToDownloadNormal() (index int) {
-	for i, v := range a.downloaderCount {
-		if v == 0 {
-			a.downloaderCount[i]++
-			return i
-		}
-	}
-	return -1
-}
-
-func (a *ActivePiece) chooseBlockToDownloadEndgame() (index int) {
-	index, minCount := -1, -1
-	for i, v := range a.downloaderCount {
-		if v >= 0 && (minCount == -1 || minCount > v) {
-			index, minCount = i, v
-		}
-	}
-	if index > -1 {
-		a.downloaderCount[index]++
-	}
-	return
-}
-
-func (a *ActivePiece) recordBlock(index int) (requestCount int) {
-	requestCount = a.downloaderCount[index]
-	a.downloaderCount[index] = -1
-	return
-}
-
-func (a *ActivePiece) isComplete() bool {
-	for _, v := range a.downloaderCount {
-		if v != -1 {
-			return false
-		}
-	}
-	return true
-}
-
-type DownloadUpload struct{
-	Uploaded   int64
-	Downloaded int64
-}
 
 type TorrentSession struct {
 	m               *MetaInfo
@@ -225,48 +160,6 @@ type TorrentSession struct {
 	cache			*cache.LRUCache
 }
 
-type IoArgs struct{
-	f 		FileStore
-	ioMode	int
-	buf 	[]byte
-	offset 	int64
-	context	interface{}
-}
-
-type WriteContext struct{
-	peer 		*peerState
-	whichPiece 	uint32	//piece index
-	begin 		uint32
-	length 		uint32
-}
-
-type ReadContext struct{
-	peer 			*peerState
-	msgBuf			[]byte
-	globalOffset 	int64
-	length 			uint32
-}
-
-
-func IoRoutine(request <-chan *IoArgs, responce chan<- interface{} ) {
-	log.Println("start IoRoutine")
-	for arg := range request {
-		if arg.ioMode == MODE_READ{
-			_, err := arg.f.ReadAt(arg.buf, arg.offset)
-			if err != nil {
-				panic("")
-			}
-		}else{	//write
-			_, err := arg.f.WriteAt(arg.buf, arg.offset)
-			if err != nil {
-				panic("")
-			}
-		}
-
-		responce<-arg.context
-	}
-	log.Println("exit IoRoutine")
-}
 
 func NewTorrentSession(torrent string) (ts *TorrentSession, err error) {
 
@@ -339,6 +232,10 @@ func NewTorrentSession(torrent string) (ts *TorrentSession, err error) {
 	go IoRoutine(t.ioRequestChan, t.ioResponceChan)
 
 	return t, err
+}
+
+func (t *TorrentSession) isSeeding() bool{
+	return t.goodPieces == t.totalPieces
 }
 
 func (t *TorrentSession) fetchTrackerInfo(event string) {
@@ -450,37 +347,7 @@ func (t *TorrentSession) ClosePeer(peer *peerState) {
 	t.RemovePeer(peer.address)
 }
 
-func GetLocalIP() (string, error) { 
-    ifs, err := net.Interfaces() 
-    if err != nil { 
-            return "", err 
-    } 
 
-    for _, t := range ifs { 
-        addrsList, err := t.Addrs() 
-        if err != nil { 
-                return "", err 
-        } 
-        for _, a := range addrsList { 
-        /*
-            ipnet, ok := a.(*net.IPNet) 
-            log.Printf("%+v\n", ipnet)
-            if !ok { 
-                    continue 
-            } 
-
-            v4 := ipnet.IP.To4() 
-            log.Printf("%+v\n", ipnet.IP.To4())
-            if v4 == nil || v4[0] == 127 { // loopback address 
-                    continue 
-            } 
-            return v4, nil 
-            */
-            return a.String(), nil
-        } 
-    } 
-    return "", errors.New("cannot find local IP address") 
-} 
 
 //todo: refactor
 func (t *TorrentSession) SchedulerChokeUnchoke() {
@@ -495,24 +362,7 @@ func (t *TorrentSession) SchedulerChokeUnchoke() {
 
 	vec := make([]*peerState, 0)
 
-	if t.goodPieces < t.totalPieces {
-		for _, v := range t.peers{
-			//insertion sort
-			if !v.peer_interested || v.isSeed {
-				continue
-			}
-
-			i := 0
-			for ; i < len(vec); i++ {
-				 if v.download >= vec[i].download {	//find position
-					break
-				}
-			}
-
-			vec = append(vec[:i], append([]*peerState{v}, vec[i:]...)...)
-			//log.Println(v.address, "download ", v.download, "upload", v.upload)
-		}
-	}else{
+	if t.isSeeding() {
 		for _, v := range t.peers{
 			//insertion sort
 			if !v.peer_interested || v.isSeed {
@@ -522,6 +372,24 @@ func (t *TorrentSession) SchedulerChokeUnchoke() {
 			i := 0
 			for ; i < len(vec); i++ {
 				 if v.upload >= vec[i].upload {	//find position
+					break
+				}
+			}
+
+			vec = append(vec[:i], append([]*peerState{v}, vec[i:]...)...)
+			//log.Println(v.address, "download ", v.download, "upload", v.upload)
+		}
+
+	}else{
+		for _, v := range t.peers{
+			//insertion sort
+			if !v.peer_interested || v.isSeed {
+				continue
+			}
+
+			i := 0
+			for ; i < len(vec); i++ {
+				 if v.download >= vec[i].download {	//find position
 					break
 				}
 			}
@@ -540,8 +408,8 @@ func (t *TorrentSession) SchedulerChokeUnchoke() {
 		}
 	}
 
-	if t.goodPieces < t.totalPieces {
-		n := cfg.MAX_DOWNLOADING_CONNECTION
+	if t.isSeeding() {
+		n := cfg.MAX_UPLOADING_CONNECTION
 		//todo: refactor to function
 		if interestedCount <= n {
 			for i := 0; i < interestedCount; i++ {	//unchoke all
@@ -576,7 +444,7 @@ func (t *TorrentSession) SchedulerChokeUnchoke() {
 			}
 		}
 	}else{
-		n := cfg.MAX_UPLOADING_CONNECTION
+		n := cfg.MAX_DOWNLOADING_CONNECTION
 		//todo: refactor to function
 		if interestedCount <= n {
 			for i := 0; i < interestedCount; i++ {	//unchoke all
@@ -645,9 +513,9 @@ func (t *TorrentSession) DoTorrent() (err error) {
 		t.dht.PeersRequest(t.m.InfoHash, true)
 	}
 
-	t.fetchTrackerInfo("started")
-
-	var ioResult interface{}
+	if !t.isSeeding() {
+		t.fetchTrackerInfo("started")
+	}
 
 	for {
 		select {
@@ -723,7 +591,7 @@ func (t *TorrentSession) DoTorrent() (err error) {
 			}
 		case conn := <-conChan:
 			t.AddPeer(conn)
-		case ioResult = <-t.ioResponceChan:
+		case ioResult := <-t.ioResponceChan:
 			if _, ok := ioResult.(*WriteContext); ok {
 				
 			}else if context, ok := ioResult.(*ReadContext); ok {
@@ -922,7 +790,7 @@ func (t *TorrentSession) RecordBlock(p *peerState, piece, begin, length uint32) 
 			t.pieceSet.Set(int(piece))
 			t.goodPieces++
 			//log.Println("Have", t.goodPieces, "of", t.totalPieces, "pieces.")
-			if t.goodPieces == t.totalPieces {
+			if t.isSeeding() {
 				log.Printf("\n\n\ndownload finish\n\n\n")
 				t.fetchTrackerInfo("completed")
 				// TODO: Drop connections to all seeders.
@@ -990,13 +858,7 @@ func (t *TorrentSession) doCheckRequests(p *peerState) (err error) {
 	return
 }
 
-type CacheValue struct{
-	buf []byte
-}
 
-func (self *CacheValue) Size() int{
-	return len(self.buf) 
-}
 
 func (t *TorrentSession) DoMessage(p *peerState, message []byte) (err error) {
 	if message == nil {
@@ -1076,7 +938,7 @@ func (t *TorrentSession) DoMessage(p *peerState, message []byte) (err error) {
 				return errors.New("Unexpected length")
 			}
 			p.peer_interested = false
-			//p.SetChoke(true)
+			p.SetChoke(true)
 		case HAVE:
 			if len(message) != 5 {
 				return errors.New("Unexpected length")
@@ -1089,11 +951,6 @@ func (t *TorrentSession) DoMessage(p *peerState, message []byte) (err error) {
 				p.have.Set(int(n))
 				if !p.am_interested && !t.pieceSet.IsSet(int(n)) {
 					p.SetInterested(true)
-				}
-
-				if !t.pieceSet.IsSet(int(n)) && !p.peer_choking && len(p.our_requests) < cfg.MAX_OUR_REQUESTS{
-					log.Print(".")
-					//t.RequestBlock(p)
 				}
 			} else {
 				return errors.New("have index is out of range.")
@@ -1164,9 +1021,10 @@ func (t *TorrentSession) DoMessage(p *peerState, message []byte) (err error) {
 			if index >= uint32(p.have.n) {
 				return errors.New("piece out of range.")
 			}
-			if t.pieceSet.IsSet(int(index)) {
+			if t.pieceSet.IsSet(int(index)) {	//timeout will cause this
 				log.Println("We already have that piece", p.address)
 				// We already have that piece, keep going
+				//err = t.RequestBlock(p)
 				break
 			}
 			if int64(begin) >= t.m.Info.PieceLength {
@@ -1201,7 +1059,6 @@ func (t *TorrentSession) DoMessage(p *peerState, message []byte) (err error) {
 
 			t.RecordBlock(p, index, begin, uint32(length))
 			err = t.RequestBlock(p)
-
 			
 		case CANCEL:
 			// log.Println("cancel")

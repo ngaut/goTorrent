@@ -14,6 +14,11 @@ type peerMessage struct {
 	message []byte // nil means an error occurred
 }
 
+type DownloadUpload struct{
+	Uploaded   int64
+	Downloaded int64
+}
+
 type peerState struct {
 	address         string
 	id              string
