@@ -33,6 +33,7 @@ type Config struct{
 	trackerLessMode 			bool
 	noCheckSum 					bool
 	doRealReadWrite				bool
+	rechokeTick					int
 }
 
 // BitTorrent message types. Sources:
@@ -69,7 +70,8 @@ func init() {
 	rand.Seed(int64(time.Now().Nanosecond()))
 
 	cfg = Config{MAX_NUM_PEERS : 200, TARGET_NUM_PEERS : 30, MAX_DOWNLOADING_CONNECTION : 2,
-		MAX_UPLOADING_CONNECTION : 2, MAX_OUR_REQUESTS : 10, MAX_PEER_REQUESTS : 10, doRealReadWrite:true}
+		MAX_UPLOADING_CONNECTION : 2, MAX_OUR_REQUESTS : 10, MAX_PEER_REQUESTS : 10, doRealReadWrite:true,
+		rechokeTick:10}
 }
 
 
@@ -431,18 +433,18 @@ func (t *TorrentSession) SchedulerChokeUnchoke() {
 		//todo: refactor to function
 		if interestedCount <= n {
 			for i := 0; i < interestedCount; i++ {	//unchoke all
-				log.Println("unchoke ", vec[i].address, "download", vec[i].download, "upload", vec[i].upload, "am_choking", vec[i].am_choking)
+				//log.Println("unchoke ", vec[i].address, "download", vec[i].download, "upload", vec[i].upload, "am_choking", vec[i].am_choking)
 				vec[i].SetChoke(false)
 			}
 
 			//choke all others
 			for i := interestedCount; i < len(vec); i++ {	
-				log.Println("choke ", vec[i].address, "download", vec[i].download, "upload", vec[i].upload, "am_choking", vec[i].am_choking)
+				//log.Println("choke ", vec[i].address, "download", vec[i].download, "upload", vec[i].upload, "am_choking", vec[i].am_choking)
 				vec[i].SetChoke(true)
 			}
 		}else{
 			for i := 0; i < n; i++ {
-				log.Println("unchoke ", vec[i].address, "download", vec[i].download, "upload", vec[i].upload, "am_choking", vec[i].am_choking)
+				//log.Println("unchoke ", vec[i].address, "download", vec[i].download, "upload", vec[i].upload, "am_choking", vec[i].am_choking)
 				vec[i].SetChoke(false)
 			}
 
@@ -450,13 +452,13 @@ func (t *TorrentSession) SchedulerChokeUnchoke() {
 			//随机unchoke一个连接
 			opti := rand.Intn(len(left));
 			
-			log.Println("optimistic unchoke ", left[opti].address, "download", left[opti].download, "upload", left[opti].upload, "am_choking", vec[opti].am_choking)
+			//log.Println("optimistic unchoke ", left[opti].address, "download", left[opti].download, "upload", left[opti].upload, "am_choking", vec[opti].am_choking)
 			left[opti].SetChoke(false)
 
 			//choke all others
 			for i := n; i < len(vec); i++ {	
 				if i != n + opti {
-					log.Println("choke ", vec[i].address, "download", vec[i].download, "upload", vec[i].upload, "am_choking", vec[i].am_choking)
+					//log.Println("choke ", vec[i].address, "download", vec[i].download, "upload", vec[i].upload, "am_choking", vec[i].am_choking)
 					vec[i].SetChoke(true)
 				}
 			}
@@ -466,18 +468,18 @@ func (t *TorrentSession) SchedulerChokeUnchoke() {
 		//todo: refactor to function
 		if interestedCount <= n {
 			for i := 0; i < interestedCount; i++ {	//unchoke all
-				log.Println("unchoke ", vec[i].address, "download", vec[i].download, "upload", vec[i].upload, "am_choking", vec[i].am_choking)
+				//log.Println("unchoke ", vec[i].address, "download", vec[i].download, "upload", vec[i].upload, "am_choking", vec[i].am_choking)
 				vec[i].SetChoke(false)
 			}
 
 			//choke all others
 			for i := interestedCount; i < len(vec); i++ {	
-				log.Println("choke ", vec[i].address, "download", vec[i].download, "upload", vec[i].upload, "am_choking", vec[i].am_choking)
+				//log.Println("choke ", vec[i].address, "download", vec[i].download, "upload", vec[i].upload, "am_choking", vec[i].am_choking)
 				vec[i].SetChoke(true)
 			}
 		}else{
 			for i := 0; i < n; i++ {
-				log.Println("unchoke ", vec[i].address, "download", vec[i].download, "upload", vec[i].upload, "am_choking", vec[i].am_choking)
+				//log.Println("unchoke ", vec[i].address, "download", vec[i].download, "upload", vec[i].upload, "am_choking", vec[i].am_choking)
 				vec[i].SetChoke(false)
 			}
 
@@ -485,13 +487,13 @@ func (t *TorrentSession) SchedulerChokeUnchoke() {
 			//随机unchoke一个连接
 			opti := rand.Intn(len(left));
 			
-			log.Println("optimistic unchoke ", left[opti].address, "download", left[opti].download, "upload", left[opti].upload, "am_choking", vec[opti].am_choking)
+			//log.Println("optimistic unchoke ", left[opti].address, "download", left[opti].download, "upload", left[opti].upload, "am_choking", vec[opti].am_choking)
 			left[opti].SetChoke(false)
 
 			//choke all others
 			for i := n; i < len(vec); i++ {	
 				if i != n + opti {
-					log.Println("choke ", vec[i].address, "download", vec[i].download, "upload", vec[i].upload, "am_choking", vec[i].am_choking)
+					//log.Println("choke ", vec[i].address, "download", vec[i].download, "upload", vec[i].upload, "am_choking", vec[i].am_choking)
 					vec[i].SetChoke(true)
 				}
 			}
@@ -512,7 +514,7 @@ func (t *TorrentSession) DoTorrent() (err error) {
 	t.lastHeartBeat = time.Now()
 
 	log.Println("Fetching torrent.")
-	rechokeChan := time.Tick(10 * time.Second)
+	rechokeChan := time.Tick(time.Duration(cfg.rechokeTick) * time.Second)
 	// Start out polling tracker every 20 seconds untill we get a response.
 	// Maybe be exponential backoff here?
 	retrackerChan := time.Tick(20 * time.Second)
@@ -709,6 +711,7 @@ func (t *TorrentSession) RequestBlock(p *peerState) (err error) {
 	return nil
 }
 
+
 func (t *TorrentSession) ChoosePiece(p *peerState) (piece int) {
 	n := t.totalPieces
 	start := rand.Intn(n)
@@ -809,7 +812,8 @@ func (t *TorrentSession) RecordBlock(p *peerState, piece, begin, length uint32) 
 				log.Printf("\n\n\ndownload finish\n\n\n")
 				t.fetchTrackerInfo("completed")
 				// TODO: Drop connections to all seeders.
-				for _, p := range t.peers {
+				for k, v := range t.history {
+					log.Println("total", k, "dwonload", v.Downloaded, "upload", v.Uploaded)
 					p.SetInterested(false)
 				}
 			}
@@ -941,19 +945,38 @@ func (t *TorrentSession) DoMessage(p *peerState, message []byte) (err error) {
 				}
 			}
 		case INTERESTED:
-			log.Println("interested from", p.address)
+			//log.Println("interested from", p.address)
 			if len(message) != 1 {
 				return errors.New("Unexpected length")
 			}
 			p.peer_interested = true
 			//p.SetChoke(true)
 		case NOT_INTERESTED:
-			log.Println("not interested from", p.address)
+			//log.Println("not interested from", p.address)
 			if len(message) != 1 {
 				return errors.New("Unexpected length")
 			}
 			p.peer_interested = false
+			/*
+			if time.Now().Sub(p.lastSchedule).Seconds() >= 3 && time.Now().Sub(p.lastSchedule).Seconds() <= float64(cfg.rechokeTick) - 3 {
+				//todo: random unchoke someone who is interested and is choked
+				vec := make([]*peerState, 0)
+				for _, v := range t.peers{
+					if !v.peer_interested || v.isSeed || !v.am_choking {
+						continue
+					}
+
+					vec = append(vec, v)
+				}
+
+				if len(vec) > 0 {
+					n := rand.Intn(len(vec))
+					vec[n].SetChoke(false)
+				}
+			}
+
 			p.SetChoke(true)
+			*/
 		case HAVE:
 			if len(message) != 5 {
 				return errors.New("Unexpected length")
@@ -966,6 +989,11 @@ func (t *TorrentSession) DoMessage(p *peerState, message []byte) (err error) {
 				p.have.Set(int(n))
 				if !p.am_interested && !t.pieceSet.IsSet(int(n)) {
 					p.SetInterested(true)
+				}
+
+				if !t.pieceSet.IsSet(int(n)) && !p.peer_choking && len(p.our_requests) < cfg.MAX_OUR_REQUESTS{
+					//log.Print(".")
+					t.RequestBlock(p)
 				}
 			} else {
 				return errors.New("have index is out of range.")
