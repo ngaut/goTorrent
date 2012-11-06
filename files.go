@@ -1,11 +1,17 @@
 package main
 
+/*
+#include "fileOp.h"
+*/
+import "C"
 import (
 	"errors"
 	"io"
 	"os"
 	"path"
+	"log"
 	"strings"
+	"unsafe"
 )
 
 type FileStore interface {
@@ -16,7 +22,7 @@ type FileStore interface {
 
 type fileEntry struct {
 	length int64
-	fd     *os.File
+	fd     unsafe.Pointer
 }
 
 type fileStore struct {
@@ -24,16 +30,21 @@ type fileStore struct {
 	files   []fileEntry // Stored in increasing globalOffset order
 }
 
+
 func (fe *fileEntry) open(name string, length int64) (err error) {
 	fe.length = length
 	st, err := os.Stat(name)
 	if err != nil && os.IsNotExist(err) {
+		/*
 		fe.fd, err = os.Create(name)
 		if err != nil {
 			return
-		}
+		}*/
+		fe.fd = C.Open(C.CString(name), C.CString("wb+"))
+		err = nil
 	} else {
-		fe.fd, err = os.OpenFile(name, os.O_RDWR, 0600)
+		//fe.fd, err = os.OpenFile(name, os.O_RDWR, 0600)
+		fe.fd = C.Open(C.CString(name), C.CString("rb+"))
 		if st.Size() == length {
 			return
 		}
@@ -41,8 +52,8 @@ func (fe *fileEntry) open(name string, length int64) (err error) {
 	err = os.Truncate(name, length)
 	if err != nil {
 		return
-		err = errors.New("Could not truncate file.")
 	}
+
 	return
 }
 
@@ -122,9 +133,16 @@ func (f *fileStore) ReadAt(p []byte, off int64) (n int, err error) {
 			}
 			fd := entry.fd
 			var nThisTime int
-			nThisTime, err = fd.ReadAt(p[0:chunk], itemOffset)
+			/*nThisTime, err = fd.ReadAt(p[0:chunk], itemOffset)
 			n = n + nThisTime
 			if err != nil {
+				return
+			}
+			*/
+
+			nThisTime = int(C.ReadAt(unsafe.Pointer(fd), unsafe.Pointer(&p[0]), _Ctype_int(chunk), _Ctype_longlong(itemOffset)))
+			if nThisTime < 0 {
+				log.Println("read file failed")
 				return
 			}
 			p = p[nThisTime:]
@@ -153,11 +171,20 @@ func (f *fileStore) WriteAt(p []byte, off int64) (n int, err error) {
 			}
 			fd := entry.fd
 			var nThisTime int
+			/*
 			nThisTime, err = fd.WriteAt(p[0:chunk], itemOffset)
 			n += nThisTime
 			if err != nil {
 				return
 			}
+			*/
+
+			nThisTime = int(C.WriteAt(fd, unsafe.Pointer(&p[0]), _Ctype_int(chunk), _Ctype_longlong(itemOffset)))
+			if nThisTime < 0 {
+				log.Println("read file failed")
+				return
+			}
+
 			p = p[nThisTime:]
 			off += int64(nThisTime)
 		}
@@ -181,7 +208,8 @@ func (f *fileStore) Close() (err error) {
 	for i, _ := range f.files {
 		fd := f.files[i].fd
 		if fd != nil {
-			fd.Close()
+			//fd.Close()
+			C.Close(fd)
 			f.files[i].fd = nil
 		}
 	}
