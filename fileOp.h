@@ -4,9 +4,9 @@
 #include <windows.h>
 
 void ShowMessage(char* str);
-int ReadAt(void* h, void* buf, int len, __int64 offset);
-int WriteAt(void* h, void* buf, int len, __int64 offset);
-void* Open(const char* fname, const char* mode);
-void Close(void* h);
+int ReadAt(int fd, void* buf, int len, __int64 offset);
+int WriteAt(int fd, void* buf, int len, __int64 offset);
+int Open(const char* fname, int oflag);
+void Close(int fd);
 
 #endif

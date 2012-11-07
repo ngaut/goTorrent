@@ -14,6 +14,8 @@ import (
 	"unsafe"
 )
 
+const O_BINARY = 0x8000 
+
 type FileStore interface {
 	io.ReaderAt
 	io.WriterAt
@@ -22,7 +24,7 @@ type FileStore interface {
 
 type fileEntry struct {
 	length int64
-	fd     unsafe.Pointer
+	fd     int
 }
 
 type fileStore struct {
@@ -33,28 +35,22 @@ type fileStore struct {
 
 func (fe *fileEntry) open(name string, length int64) (err error) {
 	fe.length = length
-	st, err := os.Stat(name)
-	if err != nil && os.IsNotExist(err) {
-		/*
-		fe.fd, err = os.Create(name)
-		if err != nil {
-			return
-		}*/
-		fe.fd = C.Open(C.CString(name), C.CString("wb+"))
-		err = nil
-	} else {
-		//fe.fd, err = os.OpenFile(name, os.O_RDWR, 0600)
-		fe.fd = C.Open(C.CString(name), C.CString("rb+"))
-		if st.Size() == length {
-			return
+	_, e := os.Stat(name)
+	if e != nil && os.IsNotExist(e) {
+		_, err = os.Create(name)
+ 		if err != nil {
+ 			return
 		}
-	}
-	err = os.Truncate(name, length)
-	if err != nil {
-		return
-	}
+	} 
 
-	return
+	 err = os.Truncate(name, length)
+ 	if err != nil {
+ 		return
+ 	}
+
+	fe.fd = int(C.Open(C.CString(name), _Ctype_int(os.O_RDWR | O_BINARY)))
+	log.Println("fd", fe.fd)
+	return nil
 }
 
 func ensureDirectory(fullPath string) (err error) {
@@ -140,9 +136,10 @@ func (f *fileStore) ReadAt(p []byte, off int64) (n int, err error) {
 			}
 			*/
 
-			nThisTime = int(C.ReadAt(unsafe.Pointer(fd), unsafe.Pointer(&p[0]), _Ctype_int(chunk), _Ctype_longlong(itemOffset)))
-			if nThisTime < 0 {
-				log.Println("read file failed")
+			nThisTime = int(C.ReadAt(_Ctype_int(fd), unsafe.Pointer(&p[0]), _Ctype_int(chunk), _Ctype_longlong(itemOffset)))
+			if nThisTime <= 0 {
+				//log.Println("read file failed, offset", itemOffset, "fd", fd)
+				//panic("")
 				return
 			}
 			p = p[nThisTime:]
@@ -178,10 +175,10 @@ func (f *fileStore) WriteAt(p []byte, off int64) (n int, err error) {
 				return
 			}
 			*/
-
-			nThisTime = int(C.WriteAt(fd, unsafe.Pointer(&p[0]), _Ctype_int(chunk), _Ctype_longlong(itemOffset)))
+			nThisTime = int(C.WriteAt(_Ctype_int(fd), unsafe.Pointer(&p[0]), _Ctype_int(chunk), _Ctype_longlong(itemOffset)))
 			if nThisTime < 0 {
-				log.Println("read file failed")
+				//log.Println("Write file failed")
+				panic("")
 				return
 			}
 
@@ -207,10 +204,10 @@ func (f *fileStore) WriteAt(p []byte, off int64) (n int, err error) {
 func (f *fileStore) Close() (err error) {
 	for i, _ := range f.files {
 		fd := f.files[i].fd
-		if fd != nil {
+		if fd != 0 {
 			//fd.Close()
-			C.Close(fd)
-			f.files[i].fd = nil
+			C.Close(_Ctype_int(fd))
+			f.files[i].fd = 0
 		}
 	}
 	return

@@ -7,34 +7,57 @@
 
 void ShowMessage(char* str)
 {
-  printf("%s\n", str);
-  MessageBoxA(NULL, str, "", MB_OK);
+	printf("%s\n", str);
+	MessageBoxA(NULL, str, "", MB_OK);
 }
 
 
 
-int ReadAt(void* h, void* buf, int len, __int64 offset){
-	FILE* f = (FILE*)h;
-	_lseeki64(f, offset, SEEK_SET);
-	int n = fread(buf, 1, len, f);
+int ReadAt(int fd, void* buf, int len, __int64 offset){
+	int n = _lseeki64(fd, offset, SEEK_SET);
+	if (n == -1)
+	{
+		printf("_lseeki64 errno %d\n", errno);
+		ShowMessage("oops _lseeki64 failed");
+	}
+	n = _read(fd, buf, len);
+
 	//printf("ReadAt %I64d\n", offset);
 
+	if (n <= 0)
+	{
+		printf("errno %d\n", errno);
+		ShowMessage("oops");
+	}
+
 	return n;
 }
 
-int WriteAt(void* h, void* buf, int len, __int64 offset){
-	FILE* f = (FILE*)h;
-	_lseeki64(f, offset, SEEK_SET);
-	int n = fwrite(buf, 1, len, f);
+int WriteAt(int fd, void* buf, int len, __int64 offset){
+	int n = _lseeki64(fd, offset, SEEK_SET);
+	if (n == -1)
+	{
+		printf("_lseeki64 errno %d\n", errno);
+		ShowMessage("oops");
+	}
+	n = _write(fd, buf, len);
+
 	//printf("WriteAt %I64d\n", offset);
 
+	if (n <= 0)
+	{
+		printf("errno %d\n", errno);
+		ShowMessage("oops");
+	}
+
 	return n;
 }
 
-void* Open(const char* fname, const char* mode){
-	return (void*)fopen(fname, mode);
+int Open(const char* fname, int oflag){
+	return _open(fname, oflag);
 }
 
-void Close(void* h){
-	fclose((FILE*)h);
+void Close(int fd){
+	ShowMessage("close file");
+	_close(fd);
 }
