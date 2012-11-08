@@ -932,8 +932,7 @@ func (t *TorrentSession) DoMessage(p *peerState, message []byte) (err error) {
 
 		//LiuQi: exchange bitfield
 		length := 1 + (t.totalPieces + 7) / 8
-		bitfieldMsg := make([]byte, length) 
-		uint32ToBytes(bitfieldMsg, uint32(length) + 1)
+		bitfieldMsg := make([]byte, length + 1) 
 		bitfieldMsg[0] = BITFIELD
 		copy(bitfieldMsg[1:], t.pieceSet.b)
 		log.Println("send bitfield to", p.address)
