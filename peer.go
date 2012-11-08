@@ -7,8 +7,6 @@ import (
 )
 
 
-const STANDARD_BLOCK_LENGTH = 16 * 1024
-
 type peerMessage struct {
 	peer    *peerState
 	message []byte // nil means an error occurred
@@ -99,7 +97,7 @@ func (p *peerState) AddRequest(index, begin, length uint32) {
 func (p *peerState) RemoveRequest() (index, begin, length uint32, ok bool) {
 	for k, _ := range p.peer_requests {
 		index, begin = uint32(k>>32), uint32(k)
-		length = STANDARD_BLOCK_LENGTH
+		length = uint32(cfg.STANDARD_BLOCK_LENGTH)
 		ok = true
 		return
 	}

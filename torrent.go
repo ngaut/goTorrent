@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"os"
+	"io/ioutil"
 	"math/rand"
 	"net"
 	"net/url"
@@ -20,6 +22,7 @@ import (
 
 
 type Config struct{
+	STANDARD_BLOCK_LENGTH		int
 	MAX_NUM_PEERS 				int 
 	TARGET_NUM_PEERS 			int 
 	MAX_DOWNLOADING_CONNECTION  int	
@@ -71,7 +74,7 @@ func init() {
 
 	cfg = Config{MAX_NUM_PEERS : 200, TARGET_NUM_PEERS : 30, MAX_DOWNLOADING_CONNECTION : 2,
 		MAX_UPLOADING_CONNECTION : 2, MAX_OUR_REQUESTS : 10, MAX_PEER_REQUESTS : 10, doRealReadWrite:true,
-		rechokeTick:10}
+		rechokeTick:10, STANDARD_BLOCK_LENGTH:16 * 1024}
 }
 
 
@@ -161,6 +164,7 @@ type TorrentSession struct {
 	ioRequestChan 	chan *IoArgs
 	ioResponceChan 	chan interface{}
 	cache			*cache.LRUCache
+	fastResumeFile  string
 }
 
 
@@ -204,6 +208,7 @@ func NewTorrentSession(torrent string) (ts *TorrentSession, err error) {
 	if err != nil {
 		return
 	}
+
 	t.lastPieceLength = int(t.totalSize % t.m.Info.PieceLength)
 
 	start := time.Now()
@@ -211,11 +216,28 @@ func NewTorrentSession(torrent string) (ts *TorrentSession, err error) {
 	var good, bad int
 	var pieceSet *Bitset
 	if cfg.noCheckSum{
-		good = int((t.totalSize + int64(t.m.Info.PieceLength) - 1) / int64(t.m.Info.PieceLength))
-		bad = 0
-		pieceSet = NewBitset(good + bad)
-		for i := 0; i < good + bad; i++ {
-			pieceSet.Set(i)
+		//todo: refactor to function
+		t.fastResumeFile = torrent + ".fastResume"
+		if f, err := os.OpenFile(t.fastResumeFile, os.O_CREATE | os.O_RDWR | O_BINARY, 0); err != nil {
+			panic("can not open fast resume file")
+		}else{
+			defer f.Close()
+			set, _ := ioutil.ReadAll(f)
+			totalPieceCount := int((t.totalSize + int64(t.m.Info.PieceLength) - 1) / int64(t.m.Info.PieceLength))
+			if len(set) != totalPieceCount {
+				log.Println("warning, invalid fast resume file")
+				good, bad, pieceSet, err = checkPieces(t.fileStore, t.totalSize, t.m)
+			}else{
+				pieceSet = NewBitset(totalPieceCount)
+				for i := 0; i < totalPieceCount; i++ {
+					if set[i] == 1 {
+						pieceSet.Set(i)
+						good++
+					}else{
+						bad++
+					}
+				}
+			}
 		}
 	}else{
 		good, bad, pieceSet, err = checkPieces(t.fileStore, t.totalSize, t.m)
@@ -398,7 +420,6 @@ func (t *TorrentSession) SchedulerChokeUnchoke() {
 			transferBytes += v.upload
 			//log.Println(v.address, "download ", v.download, "upload", v.upload)
 		}
-
 	}else{
 		for _, v := range t.peers{
 			//insertion sort
@@ -507,6 +528,8 @@ func (t *TorrentSession) SchedulerChokeUnchoke() {
 			ps.download = 0;
 			ps.lastSchedule = time.Now()
 	}
+
+	t.SaveResumeFile()
 }
 
 
@@ -702,7 +725,7 @@ func (t *TorrentSession) RequestBlock(p *peerState) (err error) {
 		if piece == t.totalPieces-1 {
 			pieceLength = t.lastPieceLength
 		}
-		pieceCount := (pieceLength + STANDARD_BLOCK_LENGTH - 1) / STANDARD_BLOCK_LENGTH
+		pieceCount := (pieceLength + cfg.STANDARD_BLOCK_LENGTH - 1) / cfg.STANDARD_BLOCK_LENGTH
 		t.activePieces[piece] = &ActivePiece{make([]int, pieceCount), pieceLength}
 		return t.RequestBlock2(p, piece, false)
 	} else {
@@ -749,13 +772,13 @@ func (t *TorrentSession) RequestBlock2(p *peerState, piece int, endGame bool) (e
 
 // Request or cancel a block
 func (t *TorrentSession) requestBlockImp(p *peerState, piece int, block int, request bool) {
-	begin := block * STANDARD_BLOCK_LENGTH
+	begin := block * cfg.STANDARD_BLOCK_LENGTH
 	req := make([]byte, 13)
 	opcode := byte(6)
 	if !request {
 		opcode = byte(8) // Cancel
 	}
-	length := STANDARD_BLOCK_LENGTH
+	length := cfg.STANDARD_BLOCK_LENGTH
 	if piece == t.totalPieces-1 {
 		left := t.lastPieceLength - begin
 		if left < length {
@@ -778,7 +801,7 @@ func (t *TorrentSession) requestBlockImp(p *peerState, piece int, block int, req
 }
 
 func (t *TorrentSession) RecordBlock(p *peerState, piece, begin, length uint32) (err error) {
-	block := begin / STANDARD_BLOCK_LENGTH
+	block := int(begin) / cfg.STANDARD_BLOCK_LENGTH
 	// log.Println("Received block", piece, ".", block)
 	requestIndex := (uint64(piece) << 32) | uint64(begin)
 	delete(p.our_requests, requestIndex)
@@ -816,6 +839,7 @@ func (t *TorrentSession) RecordBlock(p *peerState, piece, begin, length uint32) 
 					log.Println("total", k, "dwonload", v.Downloaded, "upload", v.Uploaded)
 					p.SetInterested(false)
 				}
+				t.SaveResumeFile()
 			}
 
 			for _, p := range t.peers {
@@ -849,7 +873,7 @@ func (t *TorrentSession) removeRequests(p *peerState) (err error) {
 	for k, _ := range p.our_requests {
 		piece := int(k >> 32)
 		begin := int(k)
-		block := begin / STANDARD_BLOCK_LENGTH
+		block := begin / cfg.STANDARD_BLOCK_LENGTH
 		// log.Println("Forgetting we requested block ", piece, ".", block)
 		t.removeRequest(piece, block)
 	}
@@ -869,7 +893,7 @@ func (t *TorrentSession) doCheckRequests(p *peerState) (err error) {
 	for k, v := range p.our_requests {
 		if now.Sub(v).Seconds() > 30 {
 			piece := int(k >> 32)
-			block := int(k) / STANDARD_BLOCK_LENGTH
+			block := int(k) / cfg.STANDARD_BLOCK_LENGTH
 			log.Println("timing out request of", piece, ".", block, "from", p.address)
 			t.removeRequest(piece, block)
 		}
@@ -957,26 +981,6 @@ func (t *TorrentSession) DoMessage(p *peerState, message []byte) (err error) {
 				return errors.New("Unexpected length")
 			}
 			p.peer_interested = false
-			/*
-			if time.Now().Sub(p.lastSchedule).Seconds() >= 3 && time.Now().Sub(p.lastSchedule).Seconds() <= float64(cfg.rechokeTick) - 3 {
-				//todo: random unchoke someone who is interested and is choked
-				vec := make([]*peerState, 0)
-				for _, v := range t.peers{
-					if !v.peer_interested || v.isSeed || !v.am_choking {
-						continue
-					}
-
-					vec = append(vec, v)
-				}
-
-				if len(vec) > 0 {
-					n := rand.Intn(len(vec))
-					vec[n].SetChoke(false)
-				}
-			}
-
-			p.SetChoke(true)
-			*/
 		case HAVE:
 			if len(message) != 5 {
 				return errors.New("Unexpected length")
@@ -1043,7 +1047,7 @@ func (t *TorrentSession) DoMessage(p *peerState, message []byte) (err error) {
 			if int64(begin)+int64(length) > t.m.Info.PieceLength {
 				return errors.New("begin + length out of range.")
 			}
-			if length != STANDARD_BLOCK_LENGTH {
+			if int(length) != cfg.STANDARD_BLOCK_LENGTH {
 				return errors.New("Unexpected block length.")
 			}
 			p.upload += int(length) / 1024	//k
@@ -1123,7 +1127,7 @@ func (t *TorrentSession) DoMessage(p *peerState, message []byte) (err error) {
 			if int64(begin)+int64(length) > t.m.Info.PieceLength {
 				return errors.New("begin + length out of range.")
 			}
-			if length != STANDARD_BLOCK_LENGTH {
+			if int(length) != cfg.STANDARD_BLOCK_LENGTH {
 				return errors.New("Unexpected block length.")
 			}
 			//just ignore it
@@ -1184,4 +1188,19 @@ func (t *TorrentSession) isInteresting(p *peerState) bool {
 		}
 	}
 	return false
+}
+
+func (t* TorrentSession) SaveResumeFile() {
+	if f, err := os.OpenFile(t.fastResumeFile, os.O_CREATE | os.O_RDWR | O_BINARY, 0); err != nil {
+			panic("can not open fast resume file")
+		}else{
+			defer f.Close()
+			buf := make([]byte, t.totalPieces)
+			for i := 0; i < t.totalPieces; i++ {
+				if t.pieceSet.IsSet(i) {
+					buf[i] = byte(1)
+				}
+			}
+			f.Write(buf)
+		}
 }
